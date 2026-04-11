@@ -49,8 +49,8 @@ flowchart TD
     M -- no --> N[Warn and fall back to Vue default behavior]
     M -- yes --> O[Materialize root props]
     O --> P[Print anonymous type literal]
-    P --> Q[Rewrite only T in defineProps<T>()]
-    Q --> R[@vitejs/plugin-vue plus compiler-sfc]
+    P --> Q[Rewrite only the defineProps type argument]
+    Q --> R[Vue plugin pipeline]
     R --> S2[Vue infers runtime props from lowered literal]
 ```
 
