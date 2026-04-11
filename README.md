@@ -4,7 +4,7 @@ Resolve Vue `defineProps<T>()` types with `tsgo` and lower them to finite type l
 
 ## Why
 
-Vue's built-in `resolveType.ts` is largely AST-driven. That works for many local and simple cases, but it loses power once the root props type depends on the real TypeScript type system: imported utility types, global ambient types, third-party declarations, intersections, mapped types, and checker-only reductions.
+Vue's built-in [`resolveType.ts`](https://github.com/vuejs/core/blob/main/packages/compiler-sfc/src/script/resolveType.ts) is largely AST-driven. That works for many local and simple cases, but it loses power once the root props type depends on the real TypeScript type system: imported utility types, global ambient types, third-party declarations, intersections, mapped types, and checker-only reductions.
 
 This plugin takes a different route:
 
