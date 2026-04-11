@@ -26,64 +26,44 @@ The plugin does not replace Vue's compiler. It feeds Vue a simpler type.
 
 ## High-Level Architecture
 
-```txt
-Vue SFC
-  |
-  v
-[typed defineProps<T>() fast path hit?]
-  |-- no ---> return original source
-  |
-  '-- yes --> parse SFC and find defineProps calls
-               |
-               v
-             collect imports and local TS declarations
-               |
-               v
-             build synthetic analysis module
-               |
-               v
-             TsgoSession.describeRootType(...)
-               |
-               v
-    +-------------------------------------------------------------------------+
-    |                              TsgoSession                                |
-    |                                                                         |
-    |  prepare virtual overlay file                                           |
-    |    |                                                                    |
-    |    v                                                                    |
-    |  updateSnapshot(changedFiles)                                           |
-    |    |                                                                    |
-    |    |-- success ----------------------------------------------------+    |
-    |    |                                                               |    |
-    |    '-- "source file not found" or                                 |    |
-    |        "synthetic target type was not resolved"                   |    |
-    |             |                                                     |    |
-    |             '-- retry once with updateSnapshot(invalidateAll: true)+    |
-    |                                                                         |
-    |  resolveName + getDeclaredTypeOfSymbol                                  |
-    |    |                                                                    |
-    |    v                                                                    |
-    |  describe root properties and index signatures                          |
-    +-------------------------------------------------------------------------+
-               |
-               v
-             [finite root object?]
-               |-- no ---> warn and fall back to Vue default behavior
-               |
-               '-- yes --> materialize root props
-                            |
-                            v
-                          print anonymous type literal
-                            |
-                            v
-                          rewrite only T in defineProps<T>()
-                            |
-                            v
-                          @vitejs/plugin-vue / compiler-sfc
-                            |
-                            v
-                          Vue infers runtime props from lowered literal
+```mermaid
+flowchart TD
+    A[Vue SFC] --> B{typed defineProps<br/>fast path hit?}
+    B -- no --> Z[Return original source]
+    B -- yes --> C[Parse SFC and find defineProps calls]
+    C --> D[Collect imports and local TS declarations]
+    D --> E[Build synthetic analysis module]
+    E --> F[TsgoSession.describeRootType]
+
+    subgraph S[TsgoSession]
+      F --> G[Prepare virtual overlay file]
+      G --> H[updateSnapshot changedFiles]
+      H --> I{incremental snapshot ok?}
+      I -- no, snapshot drift --> J[retry once with invalidateAll]
+      I -- yes --> K[resolveName plus getDeclaredTypeOfSymbol]
+      J --> K
+      K --> L[Describe root properties and index signatures]
+    end
+
+    L --> M{finite root object?}
+    M -- no --> N[Warn and fall back to Vue default behavior]
+    M -- yes --> O[Materialize root props]
+    O --> P[Print anonymous type literal]
+    P --> Q[Rewrite only T in defineProps<T>()]
+    Q --> R[@vitejs/plugin-vue plus compiler-sfc]
+    R --> S2[Vue infers runtime props from lowered literal]
 ```
+
+## Performance Architecture
+
+The plugin is designed so `tsgo` startup and project loading are reused instead of repeated.
+
+- a fast path skips files that obviously do not contain typed `defineProps<T>()`
+- one `TsgoSession` is shared across transforms in the same Vite lifecycle
+- transform results are cached for unchanged `.vue` sources
+- when upstream type files change, the plugin prefers incremental snapshot updates and only falls back to a full rebuild when needed
+
+The goal is simple: keep the common path incremental, while still recovering cleanly when the TypeScript snapshot state drifts.
 
 ## Example
 
@@ -190,108 +170,6 @@ If the root type cannot be turned into a finite object literal safely, the plugi
 ### 4. Minimal source rewrite
 
 The plugin only overwrites the generic argument span inside `defineProps<T>()`. It does not reorder code, does not touch the rest of the SFC, and does not try to generate a runtime props object on its own.
-
-## Performance Architecture
-
-The current design is built so the expensive part is amortized instead of repeated.
-
-### Fast path guard
-
-Before any SFC parsing or `tsgo` startup, the plugin checks for a likely typed `defineProps<T>()` shape. Files without `<script setup lang="ts">` plus generic `defineProps` return immediately.
-
-### Shared `TsgoSession`
-
-One `TsgoSession` is reused across transforms in the same Vite lifecycle. The session is closed in `buildEnd` and `closeBundle`.
-
-That means the common path is:
-
-- start `tsgo` once
-- reuse the same loaded project graph
-- answer many `.vue` transforms against that graph
-
-### Transform cache
-
-The plugin caches transform results by:
-
-- absolute `.vue` file id
-- exact source text
-
-If the same component is transformed again with unchanged source, the previous output and warnings are replayed without re-running `tsgo`.
-
-### Selective invalidation
-
-- when a `.vue` file changes, only that component's transform cache entry is dropped
-- when a non-`.vue` file changes, the transform cache is cleared because shared type dependencies may have changed
-- changed non-`.vue` paths are passed into the next `tsgo` snapshot update
-
-This keeps hot paths small while still letting upstream type changes invalidate the right work.
-
-## Incremental Snapshot Strategy
-
-The tricky part is keeping `tsgo` incremental without getting stuck in stale snapshot state.
-
-### Stable overlay files
-
-`TsgoSession` analyzes synthetic modules through virtual overlay files like `__vtr__0.ts` and `__vtr__1.ts`.
-
-The overlay strategy is:
-
-- keep a stable overlay identity during normal steady-state transforms
-- when upstream non-`.vue` files change, rotate to the other overlay slot for that directory
-- include a `__vtr_changed__` marker in the virtual source text so the snapshot definitely sees new content
-
-This avoids paying for a full project invalidation on every transform while still giving snapshot updates a clean path when dependencies change.
-
-### Incremental first, full rebuild only on demand
-
-Every analysis request tries `updateSnapshot` with `changedFiles` first.
-
-If that request fails with one of the snapshot-consistency errors below, the same request is retried once with `invalidateAll: true`:
-
-- `source file not found`
-- `synthetic target type was not resolved`
-
-After that retry, later requests still go back to incremental mode first. Full invalidation is a one-request escape hatch, not a permanent mode switch.
-
-### Why those two fallback errors matter
-
-`source file not found` usually means the incremental snapshot graph still points at a source identity that no longer matches the current overlay/dependency picture.
-
-`synthetic target type was not resolved` usually means the updated snapshot did not fully rebind the synthetic alias or one of its imported dependencies in the current incremental step.
-
-Those are good candidates for a one-off full rebuild because they describe snapshot drift, not a real user type error.
-
-## Safety Boundaries and Fallbacks
-
-The plugin deliberately falls back to Vue's default behavior when it cannot prove the rewrite is safe.
-
-Current fallback cases include:
-
-- analysis failure in `tsgo`
-- root open index signatures
-- unsupported computed property keys
-- property shapes that cannot be materialized into a stable printed literal
-
-The warning is explicit and the original SFC source is preserved, so the project can continue to compile under Vue's existing behavior.
-
-## Observability
-
-Enable `logSnapshotStats` to inspect how often the session stays incremental versus falling back to full invalidation:
-
-```txt
-[vite-plugin-vue-type-resolver] tsgo snapshot stats {
-  currentMode: 'incremental',
-  incrementalAttempts: 3,
-  incrementalSuccesses: 3,
-  fullRebuilds: 0,
-  fallbacks: {
-    sourceFileNotFound: 0,
-    syntheticTargetTypeNotResolved: 0
-  }
-}
-```
-
-That output is useful for validating performance in a real project instead of guessing.
 
 ## Limitations
 

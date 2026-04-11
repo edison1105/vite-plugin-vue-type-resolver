@@ -21,6 +21,9 @@ importers:
       '@types/babel__traverse':
         specifier: ^7.28.0
         version: 7.28.0
+      '@typescript/native-preview':
+        specifier: 7.0.0-dev.20260410.1
+        version: 7.0.0-dev.20260410.1
       '@vue/compiler-sfc':
         specifier: ^3.5.20
         version: 3.5.32
@@ -34,9 +37,6 @@ importers:
       '@types/node':
         specifier: ^25.5.0
         version: 25.6.0
-      '@typescript/native-preview':
-        specifier: 7.0.0-dev.20260410.1
-        version: 7.0.0-dev.20260410.1
       bumpp:
         specifier: ^11.0.1
         version: 11.0.1

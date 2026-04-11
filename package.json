@@ -1,9 +1,17 @@
 {
   "name": "vite-plugin-vue-type-resolver",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Resolve Vue defineProps<T>() types with tsgo and rewrite them into finite type literals.",
+  "homepage": "https://github.com/edison1105/vite-plugin-vue-type-resolver#readme",
+  "bugs": {
+    "url": "https://github.com/edison1105/vite-plugin-vue-type-resolver/issues"
+  },
   "license": "MIT",
-  "author": "Edison",
+  "author": "edison1105",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/edison1105/vite-plugin-vue-type-resolver.git"
+  },
   "files": [
     "dist"
   ],
@@ -28,13 +36,13 @@
     "@babel/parser": "^7.28.4",
     "@babel/traverse": "^7.28.4",
     "@types/babel__traverse": "^7.28.0",
+    "@typescript/native-preview": "7.0.0-dev.20260410.1",
     "@vue/compiler-sfc": "^3.5.20",
     "magic-string": "^0.30.21",
     "vscode-jsonrpc": "^8.2.1"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "@typescript/native-preview": "7.0.0-dev.20260410.1",
     "bumpp": "^11.0.1",
     "typescript": "^6.0.2",
     "vite-plus": "latest",
