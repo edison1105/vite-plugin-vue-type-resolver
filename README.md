@@ -24,36 +24,6 @@ The plugin does not replace Vue's compiler. It feeds Vue a simpler type.
 - does not generate runtime props options by itself
 - does not replace Vue's full compile pipeline
 
-## High-Level Architecture
-
-```mermaid
-flowchart TD
-    A[Vue SFC] --> B{typed defineProps<br/>fast path hit?}
-    B -- no --> Z[Return original source]
-    B -- yes --> C[Parse SFC and find defineProps calls]
-    C --> D[Collect imports and local TS declarations]
-    D --> E[Build synthetic analysis module]
-    E --> F[TsgoSession.describeRootType]
-
-    subgraph S[TsgoSession]
-      F --> G[Prepare virtual overlay file]
-      G --> H[updateSnapshot changedFiles]
-      H --> I{incremental snapshot ok?}
-      I -- no, snapshot drift --> J[retry once with invalidateAll]
-      I -- yes --> K[resolveName plus getDeclaredTypeOfSymbol]
-      J --> K
-      K --> L[Describe root properties and index signatures]
-    end
-
-    L --> M{finite root object?}
-    M -- no --> N[Warn and fall back to Vue default behavior]
-    M -- yes --> O[Materialize root props]
-    O --> P[Print anonymous type literal]
-    P --> Q[Rewrite only the defineProps type argument]
-    Q --> R[Vue plugin pipeline]
-    R --> S2[Vue infers runtime props from lowered literal]
-```
-
 ## Performance Architecture
 
 The plugin is designed so `tsgo` startup and project loading are reused instead of repeated.
@@ -177,3 +147,33 @@ The plugin only overwrites the generic argument span inside `defineProps<T>()`. 
 - only `defineProps<T>()` is handled right now.
 - if `tsgo` cannot analyze the type, or if the root props type cannot be made finite and safe to print, the source is left unchanged and a warning is emitted.
 - Vue still performs the rest of its normal single-file-component compile pipeline.
+
+## High-Level Architecture
+
+```mermaid
+flowchart TD
+    A[Vue SFC] --> B{typed defineProps<br/>fast path hit?}
+    B -- no --> Z[Return original source]
+    B -- yes --> C[Parse SFC and find defineProps calls]
+    C --> D[Collect imports and local TS declarations]
+    D --> E[Build synthetic analysis module]
+    E --> F[TsgoSession.describeRootType]
+
+    subgraph S[TsgoSession]
+      F --> G[Prepare virtual overlay file]
+      G --> H[updateSnapshot changedFiles]
+      H --> I{incremental snapshot ok?}
+      I -- no, snapshot drift --> J[retry once with invalidateAll]
+      I -- yes --> K[resolveName plus getDeclaredTypeOfSymbol]
+      J --> K
+      K --> L[Describe root properties and index signatures]
+    end
+
+    L --> M{finite root object?}
+    M -- no --> N[Warn and fall back to Vue default behavior]
+    M -- yes --> O[Materialize root props]
+    O --> P[Print anonymous type literal]
+    P --> Q[Rewrite only the defineProps type argument]
+    Q --> R[Vue plugin pipeline]
+    R --> S2[Vue infers runtime props from lowered literal]
+```
