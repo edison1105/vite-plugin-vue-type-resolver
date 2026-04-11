@@ -1,0 +1,78 @@
+:root {
+  color: #1f2937;
+  background: #f6f7fb;
+  font:
+    16px/1.5 Inter,
+    system-ui,
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.app-shell {
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: 48px 20px 64px;
+}
+
+.hero {
+  margin-bottom: 32px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #4f46e5;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 36px;
+  line-height: 1.1;
+  margin-bottom: 12px;
+}
+
+.lede {
+  max-width: 62ch;
+  color: #4b5563;
+}
+
+.case-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.case-card {
+  padding: 20px;
+  border: 1px solid #dbe2f0;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+
+.case-card h2 {
+  margin-bottom: 12px;
+  font-size: 20px;
+}
+
+.case-card p + p {
+  margin-top: 6px;
+}

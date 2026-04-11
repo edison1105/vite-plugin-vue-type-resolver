@@ -1,0 +1,80 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`playground compile output > global ambient props compile to expected runtime props 1`] = `
+"import { defineComponent as _defineComponent } from 'vue'
+
+export default /*@__PURE__*/_defineComponent({
+  __name: 'GlobalAmbientCase',
+  props: {
+    tone: { type: String, required: true },
+    version: { type: Number, required: false },
+    pinned: { type: Boolean, required: false }
+  },
+  setup(__props: any, { expose: __expose }) {
+  __expose();
+
+const props = __props;
+
+const __returned__ = { props }
+Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true })
+return __returned__
+}
+
+})"
+`;
+
+exports[`playground compile output > local complex props compile to expected runtime props 1`] = `
+"import { defineComponent as _defineComponent } from 'vue'
+import type { LocalCardShape } from "../types/local";
+
+
+export default /*@__PURE__*/_defineComponent({
+  __name: 'LocalComplexCase',
+  props: {
+    title: { type: String, required: true },
+    pinned: { type: Boolean, required: true },
+    count: { type: Number, required: false },
+    mode: { type: String, required: true }
+  },
+  setup(__props: any, { expose: __expose }) {
+  __expose();
+
+const modes = ["compact", "detail"] as const;
+
+const props = __props;
+
+const __returned__ = { modes, props }
+Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true })
+return __returned__
+}
+
+})"
+`;
+
+exports[`playground compile output > third-party utility props compile to expected runtime props 1`] = `
+"import { defineComponent as _defineComponent } from 'vue'
+import type { SetOptional, Simplify } from "type-fest";
+
+import type { ThirdPartyShape } from "../types/local";
+
+
+export default /*@__PURE__*/_defineComponent({
+  __name: 'ThirdPartyCase',
+  props: {
+    label: { type: String, required: true },
+    size: { type: Number, required: false },
+    active: { type: Boolean, required: true }
+  },
+  setup(__props: any, { expose: __expose }) {
+  __expose();
+
+const props =
+  __props;
+
+const __returned__ = { props }
+Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true })
+return __returned__
+}
+
+})"
+`;
