@@ -1,6 +1,6 @@
 # vite-plugin-vue-type-resolver
 
-Resolve Vue `defineProps<T>()` types with `tsgo` and lower them to finite type literals before Vue's SFC compiler runs.
+Resolve Vue `defineProps<T>()` and `defineEmits<T>()` types with `tsgo` before Vue's SFC compiler runs.
 
 ## Why
 
@@ -8,27 +8,27 @@ Vue's built-in [`resolveType.ts`](https://github.com/vuejs/core/blob/main/packag
 
 This plugin takes a different route:
 
-1. ask `tsgo` for the actual root props type that TypeScript sees in the current project
-2. materialize that root type into a finite anonymous type literal
-3. rewrite only the `defineProps<T>()` generic argument
-4. let Vue keep doing its normal runtime-props inference from the lowered literal
+1. ask `tsgo` for the actual macro type that TypeScript sees in the current project
+2. lower `defineProps<T>()` to a finite anonymous type literal, or `defineEmits<T>()` to a finite event map
+3. rewrite only the original generic type argument
+4. let Vue keep doing its normal runtime inference from the lowered type
 
 The plugin does not replace Vue's compiler. It feeds Vue a simpler type.
 
 ## Shipped Behavior
 
-- resolves `defineProps<T>()` with `tsgo`
+- resolves `defineProps<T>()` and `defineEmits<T>()` with `tsgo`
 - supports local, imported, global, and third-party types visible to the current project
 - rewrites only the generic type argument
-- warns and leaves the source unchanged when type analysis or root-props materialization cannot complete safely
-- does not generate runtime props options by itself
+- warns and leaves the source unchanged when type analysis or lowering cannot complete safely
+- does not generate runtime props or emits options by itself
 - does not replace Vue's full compile pipeline
 
 ## Performance Architecture
 
 The plugin is designed so `tsgo` startup and project loading are reused instead of repeated.
 
-- a fast path skips files that obviously do not contain typed `defineProps<T>()`
+- a fast path skips files that obviously do not contain typed `defineProps<T>()` or `defineEmits<T>()`
 - one `TsgoSession` is shared across transforms in the same Vite lifecycle
 - transform results are cached for unchanged `.vue` sources
 - when upstream type files change, the plugin prefers incremental snapshot updates and only falls back to a full rebuild when needed
@@ -76,6 +76,24 @@ defineProps<{
 
 Vue can then run its normal runtime type inference on the rewritten literal.
 
+## Installation
+
+```bash
+pnpm add -D vite-plugin-vue-type-resolver
+```
+
+```bash
+npm install -D vite-plugin-vue-type-resolver
+```
+
+```bash
+yarn add -D vite-plugin-vue-type-resolver
+```
+
+```bash
+bun add -d vite-plugin-vue-type-resolver
+```
+
 ## Usage
 
 ```ts
@@ -89,7 +107,7 @@ export default defineConfig({
 });
 ```
 
-The plugin works on Vue SFCs that use `<script setup lang="ts">` and `defineProps<T>()`.
+The plugin works on Vue SFCs that use `<script setup lang="ts">` and typed `defineProps<T>()` or `defineEmits<T>()`.
 If your project does not keep `tsconfig.json` at the Vite root, pass `tsconfigPath` to point the resolver at the right project file.
 
 ```ts
@@ -109,11 +127,11 @@ The plugin does not ask `tsgo` to analyze the `.vue` file directly. Instead it b
 
 - the imports from `<script>` and `<script setup>`
 - supported local declarations copied from the SFC
-- a synthetic alias like `type __VTR_Target_0 = <original defineProps type>`
+- a synthetic alias like `type __VTR_Target_0 = <original macro type>`
 
 That module gives `tsgo` a normal TypeScript file to analyze, with the same project-visible symbols the component can already use.
 
-### 2. Checker-first root type resolution
+### 2. Checker-first type resolution
 
 `TsgoSession` opens the real project from `tsconfig.json`, then resolves the synthetic target alias with checker APIs such as:
 
@@ -125,9 +143,11 @@ That module gives `tsgo` a normal TypeScript file to analyze, with the same proj
 
 This is the key difference from Vue's AST-only path: the resolver sees whatever the TypeScript project sees, including global ambient types and types coming from third-party packages.
 
-### 3. Root props materialization
+### 3. Lowering step
 
-The `tsgo` result is not printed back verbatim. The plugin first turns the resolved root type into a finite data model:
+The `tsgo` result is not printed back verbatim.
+
+For `defineProps<T>()`, the plugin first turns the resolved root type into a finite data model:
 
 - root properties
 - optional and readonly modifiers
@@ -135,17 +155,19 @@ The `tsgo` result is not printed back verbatim. The plugin first turns the resol
 - arrays, tuples, unions, intersections, and function placeholders
 - nested anonymous object shapes when they are safe to inline
 
-If the root type cannot be turned into a finite object literal safely, the plugin warns and leaves the source untouched.
+For `defineEmits<T>()`, the plugin extracts a finite event-name set from either property syntax or call signatures, then prints it back as an event map that Vue can infer at runtime.
+
+If the resolved type cannot be lowered safely, the plugin warns and leaves the source untouched.
 
 ### 4. Minimal source rewrite
 
-The plugin only overwrites the generic argument span inside `defineProps<T>()`. It does not reorder code, does not touch the rest of the SFC, and does not try to generate a runtime props object on its own.
+The plugin only overwrites the generic argument span inside `defineProps<T>()` or `defineEmits<T>()`. It does not reorder code, does not touch the rest of the SFC, and does not try to generate runtime options on its own.
 
 ## Limitations
 
-- runtime props options are not generated directly by this plugin; Vue still does that after the rewrite.
-- only `defineProps<T>()` is handled right now.
-- if `tsgo` cannot analyze the type, or if the root props type cannot be made finite and safe to print, the source is left unchanged and a warning is emitted.
+- runtime props and emits options are not generated directly by this plugin; Vue still does that after the rewrite.
+- only typed `defineProps<T>()` and `defineEmits<T>()` are handled.
+- if `tsgo` cannot analyze the type, or if the lowered result cannot be made finite and safe to print, the source is left unchanged and a warning is emitted.
 - Vue still performs the rest of its normal single-file-component compile pipeline.
 
 ## High-Level Architecture
