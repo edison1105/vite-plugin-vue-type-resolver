@@ -72,6 +72,13 @@ export interface TsgoIndexInfoResponse {
   isReadonly: boolean;
 }
 
+export interface TsgoSignatureResponse {
+  id: string;
+  flags: number;
+  declaration?: string;
+  parameters: string[];
+}
+
 type Awaitable<T> = T | Promise<T>;
 
 export interface VirtualFileSystemCallbacks {

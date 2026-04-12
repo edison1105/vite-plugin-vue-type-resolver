@@ -6,6 +6,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -66,6 +67,16 @@ function expectRuntimeProp(
   expect(compiled).toMatch(expected);
 }
 
+function extractRuntimeEmits(compiled: string): string[] {
+  const match = compiled.match(/emits:\s*\[([\s\S]*?)\]/);
+
+  if (!match) {
+    return [];
+  }
+
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]).sort();
+}
+
 async function transformPlaygroundComponent(relativePath: string) {
   return transformComponentInRoot(playgroundRoot, relativePath);
 }
@@ -113,7 +124,9 @@ function createSpacedPlaygroundRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "vtr playground space case "));
 
   cpSync(join(playgroundRoot, "src"), join(root, "src"), { recursive: true });
+  cpSync(join(playgroundRoot, "package.json"), join(root, "package.json"));
   cpSync(join(playgroundRoot, "tsconfig.json"), join(root, "tsconfig.json"));
+  symlinkSync(join(playgroundRoot, "node_modules"), join(root, "node_modules"), "dir");
 
   return root;
 }
@@ -199,6 +212,44 @@ describe("playground compile output", () => {
     expectRuntimeProp(compiled, { name: "dataList", type: "Array", required: true });
     expectRuntimeProp(compiled, { name: "tableList", type: "Array", required: false });
     expectRuntimeProp(compiled, { name: "loading", type: "Boolean", required: false });
+    expect(compiled).toMatchSnapshot();
+  });
+
+  test("imported generic emits compile to expected runtime emits", async () => {
+    const { id, transformed, warnings } = await transformPlaygroundComponent(
+      "src/components/ImportedGenericEmitCase.vue",
+    );
+
+    expect(warnings).toEqual([]);
+    expect(transformed).toMatch(/defineEmits<\s*\{/);
+    expect(transformed).not.toContain("defineEmits<TableEmits>()");
+    const compiled = compileTransformedComponent(
+      playgroundRoot,
+      id,
+      "src/components/ImportedGenericEmitCase.vue",
+      transformed,
+    );
+    expect(extractRuntimeEmits(compiled)).toEqual([
+      "cell-click",
+      "cell-contextmenu",
+      "cell-dblclick",
+      "cell-mouse-enter",
+      "cell-mouse-leave",
+      "current-change",
+      "expand-change",
+      "filter-change",
+      "header-click",
+      "header-contextmenu",
+      "header-dragend",
+      "row-click",
+      "row-contextmenu",
+      "row-dblclick",
+      "scroll",
+      "select",
+      "select-all",
+      "selection-change",
+      "sort-change",
+    ]);
     expect(compiled).toMatchSnapshot();
   });
 
@@ -320,6 +371,7 @@ describe("playground compile output", () => {
       expect(bundle).toContain("Global Ambient Case");
       expect(bundle).toContain("Third Party Case");
       expect(bundle).toContain("Imported Generic Table Case");
+      expect(bundle).toContain("Imported Generic Emit Case");
     } finally {
       process.chdir(originalCwd);
       rmSync(outDir, { recursive: true, force: true });
@@ -352,6 +404,7 @@ describe("playground compile output", () => {
         "src/components/GlobalAmbientCase.vue",
         "src/components/ThirdPartyCase.vue",
         "src/components/ImportedGenericTableCase.vue",
+        "src/components/ImportedGenericEmitCase.vue",
       ]) {
         const id = join(playgroundRoot, relativePath);
         const source = readFileSync(id, "utf8");
@@ -371,13 +424,13 @@ describe("playground compile output", () => {
       expect(warnings).toEqual([]);
       expect(infoCalls).toHaveLength(1);
       expect(infoCalls[0][1]).toEqual({
-        currentMode: "incremental",
-        incrementalAttempts: 4,
+        currentMode: "full",
+        incrementalAttempts: 5,
         incrementalSuccesses: 4,
-        fullRebuilds: 0,
+        fullRebuilds: 1,
         fallbacks: {
           sourceFileNotFound: 0,
-          syntheticTargetTypeNotResolved: 0,
+          syntheticTargetTypeNotResolved: 1,
         },
       });
     } finally {

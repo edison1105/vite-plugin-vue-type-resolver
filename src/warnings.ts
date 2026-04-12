@@ -15,3 +15,11 @@ export function formatFallbackWarning(file: string, reason: FallbackReason): str
     "Falling back to Vue's default type resolution.",
   ].join("\n");
 }
+
+export function formatEmitsFallbackWarning(file: string, reason: string): string {
+  return [
+    `[vite-plugin-vue-type-resolver] Failed to materialize defineEmits type in ${file}:`,
+    `${reason}.`,
+    "Falling back to Vue's default type resolution.",
+  ].join("\n");
+}

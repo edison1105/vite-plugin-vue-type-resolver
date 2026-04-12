@@ -6,14 +6,16 @@ import { parse } from "@babel/parser";
 import { parse as parseJsonc } from "jsonc-parser";
 import type { Plugin, TransformResult } from "vite-plus";
 
+import { printEmitsTypeLiteral } from "./emits/printEmitsTypeLiteral";
 import { materializeRootProps } from "./materialize/materializeRootProps";
 import { printTypeLiteral } from "./materialize/printTypeLiteral";
 import { normalizeOptions, type VueTypeResolverOptions } from "./options";
+import { findDefineEmitsCalls } from "./sfc/findDefineEmitsCalls";
 import { findDefinePropsCalls } from "./sfc/findDefinePropsCalls";
 import { parseSfc, type ParsedSfc } from "./sfc/parseSfc";
 import { TsgoSession } from "./tsgo/session";
 import { buildAnalysisModule } from "./virtual/buildAnalysisModule";
-import { formatFallbackWarning } from "./warnings";
+import { formatEmitsFallbackWarning, formatFallbackWarning } from "./warnings";
 
 interface AnalysisParts {
   imports: string[];
@@ -47,7 +49,7 @@ function isSupportedLocalDeclaration(node: TopLevelNode): boolean {
 }
 
 function shouldIncludeLocalDeclaration(text: string): boolean {
-  return !text.includes("defineProps");
+  return !text.includes("defineProps") && !text.includes("defineEmits");
 }
 
 interface TsconfigReference {
@@ -188,9 +190,9 @@ function collectAnalysisParts(sfc: ParsedSfc): AnalysisParts {
   return { imports, localDeclarations };
 }
 
-function formatAnalysisWarning(file: string, reason: string): string {
+function formatAnalysisWarning(file: string, macroName: string, reason: string): string {
   return [
-    `[vite-plugin-vue-type-resolver] Failed to analyze defineProps type in ${file}:`,
+    `[vite-plugin-vue-type-resolver] Failed to analyze ${macroName} type in ${file}:`,
     reason,
     "Falling back to Vue's default type resolution.",
   ].join("\n");
@@ -204,12 +206,12 @@ function hasTsLang(code: string): boolean {
   return code.includes('lang="ts"') || code.includes("lang='ts'") || code.includes("lang=ts");
 }
 
-function mayContainTypedDefineProps(code: string): boolean {
+function mayContainTypedMacros(code: string): boolean {
   return (
     code.includes("<script") &&
     code.includes("setup") &&
     hasTsLang(code) &&
-    code.includes("defineProps") &&
+    (code.includes("defineProps") || code.includes("defineEmits")) &&
     code.includes("<")
   );
 }
@@ -349,7 +351,7 @@ export function vueTypeResolver(options: VueTypeResolverOptions = {}): Plugin {
     },
     async transform(code, id, _options) {
       if (!id.endsWith(".vue")) return null;
-      if (!mayContainTypedDefineProps(code)) return null;
+      if (!mayContainTypedMacros(code)) return null;
 
       const cached = getCachedTransform(id, code);
       if (cached) {
@@ -370,8 +372,9 @@ export function vueTypeResolver(options: VueTypeResolverOptions = {}): Plugin {
       };
 
       const sfc = parseSfc(id, code);
-      const calls = findDefinePropsCalls(sfc);
-      if (calls.length === 0) {
+      const propsCalls = findDefinePropsCalls(sfc);
+      const emitsCalls = findDefineEmitsCalls(sfc);
+      if (propsCalls.length === 0 && emitsCalls.length === 0) {
         return setCachedTransform(id, code, null, warnings);
       }
 
@@ -379,8 +382,8 @@ export function vueTypeResolver(options: VueTypeResolverOptions = {}): Plugin {
       const magic = new MagicString(code);
       let changed = false;
 
-      for (let index = 0; index < calls.length; index += 1) {
-        const call = calls[index];
+      for (let index = 0; index < propsCalls.length; index += 1) {
+        const call = propsCalls[index];
         attemptedAnalysis = true;
         const described = await activeSession.describeRootType({
           projectFile: activeProjectFile,
@@ -389,14 +392,14 @@ export function vueTypeResolver(options: VueTypeResolverOptions = {}): Plugin {
             imports: analysis.imports,
             localDeclarations: analysis.localDeclarations,
             targetTypeText: call.typeText,
-            targetName: `__VTR_Target_${index}`,
+            targetName: `__VTR_PropsTarget_${index}`,
           }),
-          targetName: `__VTR_Target_${index}`,
+          targetName: `__VTR_PropsTarget_${index}`,
           changedFiles,
         });
 
         if (!described.ok) {
-          warn(formatAnalysisWarning(id, described.reason));
+          warn(formatAnalysisWarning(id, "defineProps", described.reason));
           continue;
         }
 
@@ -410,6 +413,35 @@ export function vueTypeResolver(options: VueTypeResolverOptions = {}): Plugin {
         }
 
         magic.overwrite(call.typeArgStart, call.typeArgEnd, printTypeLiteral(materialized.props));
+        changed = true;
+      }
+
+      for (let index = 0; index < emitsCalls.length; index += 1) {
+        const call = emitsCalls[index];
+        attemptedAnalysis = true;
+        const described = await activeSession.describeEmitNames({
+          projectFile: activeProjectFile,
+          virtualFileName: getAnalysisVirtualFileName(analysisId),
+          sourceText: buildAnalysisModule({
+            imports: analysis.imports,
+            localDeclarations: analysis.localDeclarations,
+            targetTypeText: call.typeText,
+            targetName: `__VTR_EmitsTarget_${index}`,
+          }),
+          targetName: `__VTR_EmitsTarget_${index}`,
+          changedFiles,
+        });
+
+        if (!described.ok) {
+          warn(formatEmitsFallbackWarning(id, described.reason));
+          continue;
+        }
+
+        magic.overwrite(
+          call.typeArgStart,
+          call.typeArgEnd,
+          printEmitsTypeLiteral(described.eventNames),
+        );
         changed = true;
       }
 

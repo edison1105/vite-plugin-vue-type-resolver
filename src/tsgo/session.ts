@@ -1,12 +1,17 @@
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, isAbsolute, normalize, relative, resolve, sep } from "node:path";
 
+import {
+  extractEventNamesFromTypeText,
+  extractFiniteStringLiteralsFromTypeText,
+} from "../emits/extractEventNames";
 import { TsgoClient } from "./client";
 import { getTsgoBinary } from "./getTsgoBinary";
 import type {
   AccessibleEntriesResponse,
   DiagnosticResponse,
   TsgoIndexInfoResponse,
+  TsgoSignatureResponse,
   TsgoSymbolResponse,
   TsgoTypeResponse,
   UpdateSnapshotResponse,
@@ -25,6 +30,8 @@ export type ResolveRootTypeResult =
   | { ok: false; reason: string };
 
 export interface DescribeRootTypeRequest extends ResolveRootTypeRequest {}
+
+export interface DescribeEmitNamesRequest extends ResolveRootTypeRequest {}
 
 export interface SnapshotStats {
   currentMode: "incremental" | "full";
@@ -63,7 +70,15 @@ export type DescribeRootTypeResult =
     }
   | { ok: false; reason: string };
 
+export type DescribeEmitNamesResult =
+  | {
+      ok: true;
+      eventNames: string[];
+    }
+  | { ok: false; reason: string };
+
 const TYPE_ALIAS_MEANING = 524288;
+const TYPE_FORMAT_NO_TRUNCATION = 1;
 const OPTIONAL_FLAG = 16777216;
 const READONLY_FLAG = 33554432;
 const OBJECT_FLAG_CLASS = 1;
@@ -183,6 +198,10 @@ export class TsgoSession {
     return this.enqueueResolution(() => this.describeRootTypeInternal(request));
   }
 
+  async describeEmitNames(request: DescribeEmitNamesRequest): Promise<DescribeEmitNamesResult> {
+    return this.enqueueResolution(() => this.describeEmitNamesInternal(request));
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     await this.resolutionQueue;
@@ -268,6 +287,130 @@ export class TsgoSession {
           indexInfos,
         },
       };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private async describeEmitNamesInternal(
+    request: DescribeEmitNamesRequest,
+  ): Promise<DescribeEmitNamesResult> {
+    if (this.closed) {
+      throw new Error("TsgoSession is closed");
+    }
+
+    const sourceText = this.buildVirtualSourceText(request);
+    const virtualFileName = this.prepareVirtualFile(
+      request.virtualFileName,
+      sourceText,
+      request.changedFiles,
+    );
+    this.virtualFiles.set(virtualFileName, sourceText);
+
+    try {
+      const resolved = await this.resolveRootTypeContext(request, virtualFileName);
+      if (!resolved.ok) {
+        return resolved;
+      }
+
+      const typeText = await this.client.request<string>("typeToString", {
+        snapshot: resolved.snapshotId,
+        project: resolved.projectId,
+        type: resolved.typeId,
+        flags: TYPE_FORMAT_NO_TRUNCATION,
+      });
+
+      if (!typeText) {
+        return { ok: false, reason: "resolved defineEmits type could not be printed" };
+      }
+
+      const properties = await this.client.request<TsgoSymbolResponse[]>("getPropertiesOfType", {
+        snapshot: resolved.snapshotId,
+        project: resolved.projectId,
+        type: resolved.typeId,
+      });
+
+      const signatures = await this.client.request<TsgoSignatureResponse[]>("getSignaturesOfType", {
+        snapshot: resolved.snapshotId,
+        project: resolved.projectId,
+        type: resolved.typeId,
+        kind: 0,
+      });
+
+      if (properties.length > 0 && signatures.length > 0) {
+        return {
+          ok: false,
+          reason: "defineEmits() type cannot mix call signature and property syntax",
+        };
+      }
+
+      if (signatures.length > 0) {
+        const eventNames = new Set<string>();
+
+        for (const signature of signatures) {
+          const firstParameterId = signature.parameters[0];
+
+          if (!firstParameterId) {
+            return { ok: false, reason: "event names are not a finite string literal union" };
+          }
+
+          const firstParameterType = await this.client.request<TsgoTypeResponse | null>(
+            "getTypeOfSymbol",
+            {
+              snapshot: resolved.snapshotId,
+              project: resolved.projectId,
+              symbol: firstParameterId,
+            },
+          );
+
+          if (!firstParameterType) {
+            return { ok: false, reason: "event names are not a finite string literal union" };
+          }
+
+          const firstParameterText = await this.client.request<string>("typeToString", {
+            snapshot: resolved.snapshotId,
+            project: resolved.projectId,
+            type: firstParameterType.id,
+            flags: TYPE_FORMAT_NO_TRUNCATION,
+          });
+
+          const extracted = extractFiniteStringLiteralsFromTypeText(firstParameterText);
+          if (!extracted.ok) {
+            return extracted;
+          }
+
+          for (const eventName of extracted.eventNames) {
+            eventNames.add(eventName);
+          }
+        }
+
+        return {
+          ok: true,
+          eventNames: [...eventNames].sort(),
+        };
+      }
+
+      if (properties.length > 0) {
+        const eventNames = new Set<string>();
+
+        for (const property of properties) {
+          if (this.isUnsupportedPropertyKey(property)) {
+            return { ok: false, reason: "event names are not a finite string literal union" };
+          }
+
+          eventNames.add(property.name);
+        }
+
+        return {
+          ok: true,
+          eventNames: [...eventNames].sort(),
+        };
+      }
+
+      return extractEventNamesFromTypeText(typeText);
     } catch (error) {
       return {
         ok: false,
@@ -880,7 +1023,8 @@ export class TsgoSession {
     targetName: string,
   ): boolean {
     return (
-      diagnostic.text.includes(targetName) && diagnostic.text.includes("is declared but never used")
+      diagnostic.text.includes("is declared but never used") &&
+      (diagnostic.text.includes(targetName) || /__VTR_[A-Za-z]+Target_\d+/.test(diagnostic.text))
     );
   }
 

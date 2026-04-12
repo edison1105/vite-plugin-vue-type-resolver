@@ -23,6 +23,32 @@ return __returned__
 })"
 `;
 
+exports[`playground compile output > imported generic emits compile to expected runtime emits 1`] = `
+"import { defineComponent as _defineComponent } from 'vue'
+import { ElTable } from "element-plus";
+import type { ComponentEmit } from "vue-component-type-helpers";
+
+type TableEmits = ComponentEmit<typeof ElTable>;
+
+
+export default /*@__PURE__*/_defineComponent({
+  __name: 'ImportedGenericEmitCase',
+  emits: ["cell-click", "cell-contextmenu", "cell-dblclick", "cell-mouse-enter", "cell-mouse-leave", "current-change", "expand-change", "filter-change", "header-click", "header-contextmenu", "header-dragend", "row-click", "row-contextmenu", "row-dblclick", "scroll", "select", "select-all", "selection-change", "sort-change"],
+  setup(__props, { expose: __expose, emit: __emit }) {
+  __expose();
+
+const emit = __emit;
+
+void emit;
+
+const __returned__ = { emit }
+Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true })
+return __returned__
+}
+
+})"
+`;
+
 exports[`playground compile output > imported generic table props compile to expected runtime props 1`] = `
 "import { defineComponent as _defineComponent } from 'vue'
 type BucketData = {

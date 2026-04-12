@@ -22,6 +22,128 @@ function normalizeTransformCode(
 }
 
 describe("vueTypeResolver integration", () => {
+  test("rewrites defineEmits overload type arguments into a finite event map", async () => {
+    const project = createFixtureProject({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { strict: true, module: "ESNext", moduleResolution: "Bundler" },
+        include: ["src/**/*"],
+      }),
+    });
+
+    const code = `
+<script setup lang="ts">
+type Emits = {
+  (e: "change", value: number): void
+  (e: "submit"): void
+}
+const emit = defineEmits<Emits>()
+</script>
+`;
+
+    const plugin = vueTypeResolver({
+      tsconfigPath: join(project.root, "tsconfig.json"),
+    });
+
+    const { result, warnings } = await runPluginTransform({
+      plugin,
+      code,
+      id: join(project.root, "src/App.vue"),
+    });
+
+    const transformed = normalizeTransformCode(result, code);
+
+    expect(warnings).toHaveLength(0);
+    expect(transformed).not.toBe(code);
+    expect(transformed).toContain("defineEmits<{");
+    expect(transformed).toContain("change: any[]");
+    expect(transformed).toContain("submit: any[]");
+  });
+
+  test("rewrites imported third-party helper emits types", async () => {
+    const project = createFixtureProject({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          baseUrl: ".",
+        },
+        include: ["src/**/*"],
+      }),
+      "node_modules/vue-component-type-helpers/index.d.ts": `
+export type ComponentEmit<T extends abstract new (...args: any[]) => any> =
+  InstanceType<T>["$emit"]
+`,
+      "node_modules/element-plus/index.d.ts": `
+export const ElTable: abstract new (...args: any[]) => {
+  $emit:
+    ((event: "select", selection: unknown[]) => void) &
+    ((event: "update:current-page", page: number) => void)
+}
+`,
+    });
+
+    const code = `
+<script setup lang="ts">
+import { ElTable } from "element-plus"
+import type { ComponentEmit } from "vue-component-type-helpers"
+
+type TableEmits = ComponentEmit<typeof ElTable>
+const emit = defineEmits<TableEmits>()
+</script>
+`;
+
+    const plugin = vueTypeResolver({
+      tsconfigPath: join(project.root, "tsconfig.json"),
+    });
+
+    const { result, warnings } = await runPluginTransform({
+      plugin,
+      code,
+      id: join(project.root, "src/App.vue"),
+    });
+
+    const transformed = normalizeTransformCode(result, code);
+
+    expect(warnings).toHaveLength(0);
+    expect(transformed).toContain("defineEmits<{");
+    expect(transformed).toContain("select: any[]");
+    expect(transformed).toContain('"update:current-page": any[]');
+  });
+
+  test("warns and leaves defineEmits unchanged when event names are not finite", async () => {
+    const project = createFixtureProject({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { strict: true, module: "ESNext", moduleResolution: "Bundler" },
+        include: ["src/**/*"],
+      }),
+    });
+
+    const code = `
+<script setup lang="ts">
+type Emits = (e: string, value: number) => void
+const emit = defineEmits<Emits>()
+</script>
+`;
+
+    const plugin = vueTypeResolver({
+      tsconfigPath: join(project.root, "tsconfig.json"),
+    });
+
+    const { result, warnings } = await runPluginTransform({
+      plugin,
+      code,
+      id: join(project.root, "src/Fallback.vue"),
+    });
+
+    const transformed = normalizeTransformCode(result, code);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("Failed to materialize defineEmits type");
+    expect(transformed).toBe(code);
+    expect(transformed).toContain("defineEmits<Emits>()");
+  });
+
   test("rewrites defineProps type arguments when materialization succeeds", async () => {
     const project = createFixtureProject({
       "tsconfig.json": JSON.stringify({
