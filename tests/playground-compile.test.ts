@@ -1,4 +1,13 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,22 +67,32 @@ function expectRuntimeProp(
 }
 
 async function transformPlaygroundComponent(relativePath: string) {
-  const id = join(playgroundRoot, relativePath);
+  return transformComponentInRoot(playgroundRoot, relativePath);
+}
+
+async function transformComponentInRoot(root: string, relativePath: string) {
+  const id = join(root, relativePath);
   const source = readFileSync(id, "utf8");
-  const plugin = vueTypeResolver({ tsconfigPath: playgroundTsconfigPath });
+  const plugin = vueTypeResolver({ tsconfigPath: join(root, "tsconfig.json") });
   const { result, warnings } = await runPluginTransform({
     plugin,
     code: source,
     id,
-    cwd: playgroundRoot,
+    cwd: root,
   });
   const transformed = normalizeTransformCode(result, source);
 
   return { id, source, transformed, warnings };
 }
 
-function compileTransformedComponent(id: string, relativePath: string, transformed: string) {
+function compileTransformedComponent(
+  root: string,
+  id: string,
+  relativePath: string,
+  transformed: string,
+) {
   const { descriptor } = parse(transformed, { filename: id });
+  const globalTypeFile = join(root, "src/global-types.d.ts");
   const compiled = compileScript(descriptor, {
     id: relativePath,
     fs: {
@@ -83,11 +102,20 @@ function compileTransformedComponent(id: string, relativePath: string, transform
       },
       realpath: realpathSync,
     },
-    globalTypeFiles: [join(playgroundRoot, "src/global-types.d.ts")],
+    globalTypeFiles: existsSync(globalTypeFile) ? [globalTypeFile] : [],
     inlineTemplate: false,
   }).content;
 
   return compiled;
+}
+
+function createSpacedPlaygroundRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), "vtr playground space case "));
+
+  cpSync(join(playgroundRoot, "src"), join(root, "src"), { recursive: true });
+  cpSync(join(playgroundRoot, "tsconfig.json"), join(root, "tsconfig.json"));
+
+  return root;
 }
 
 describe("playground compile output", () => {
@@ -100,6 +128,7 @@ describe("playground compile output", () => {
     expect(transformed).toMatch(/defineProps<\s*\{/);
     expect(transformed).not.toContain("defineProps<Readonly<");
     const compiled = compileTransformedComponent(
+      playgroundRoot,
       id,
       "src/components/LocalComplexCase.vue",
       transformed,
@@ -120,6 +149,7 @@ describe("playground compile output", () => {
     expect(transformed).toMatch(/defineProps<\s*\{/);
     expect(transformed).not.toContain("GlobalAmbientProps");
     const compiled = compileTransformedComponent(
+      playgroundRoot,
       id,
       "src/components/GlobalAmbientCase.vue",
       transformed,
@@ -139,6 +169,7 @@ describe("playground compile output", () => {
     expect(transformed).toMatch(/defineProps<\s*\{/);
     expect(transformed).not.toContain("defineProps<Simplify<");
     const compiled = compileTransformedComponent(
+      playgroundRoot,
       id,
       "src/components/ThirdPartyCase.vue",
       transformed,
@@ -147,6 +178,119 @@ describe("playground compile output", () => {
     expectRuntimeProp(compiled, { name: "size", type: "Number", required: false });
     expectRuntimeProp(compiled, { name: "active", type: "Boolean", required: true });
     expect(compiled).toMatchSnapshot();
+  });
+
+  test("imported generic table props compile to expected runtime props", async () => {
+    const { id, transformed, warnings } = await transformPlaygroundComponent(
+      "src/components/ImportedGenericTableCase.vue",
+    );
+
+    expect(warnings).toEqual([]);
+    expect(transformed).toMatch(/defineProps<\s*\{/);
+    expect(transformed).not.toContain("defineProps<TableProps<");
+    expect(transformed).not.toContain("../types/table");
+    const compiled = compileTransformedComponent(
+      playgroundRoot,
+      id,
+      "src/components/ImportedGenericTableCase.vue",
+      transformed,
+    );
+    expect(compiled).not.toContain("../types/table");
+    expectRuntimeProp(compiled, { name: "dataList", type: "Array", required: true });
+    expectRuntimeProp(compiled, { name: "tableList", type: "Array", required: false });
+    expectRuntimeProp(compiled, { name: "loading", type: "Boolean", required: false });
+    expect(compiled).toMatchSnapshot();
+  });
+
+  test("imported generic table props still resolve from a project path with spaces", async () => {
+    const spacedRoot = createSpacedPlaygroundRoot();
+
+    try {
+      const { id, transformed, warnings } = await transformComponentInRoot(
+        spacedRoot,
+        "src/components/ImportedGenericTableCase.vue",
+      );
+
+      expect(warnings).toEqual([]);
+      expect(transformed).toMatch(/defineProps<\s*\{/);
+      const compiled = compileTransformedComponent(
+        spacedRoot,
+        id,
+        "src/components/ImportedGenericTableCase.vue",
+        transformed,
+      );
+      expectRuntimeProp(compiled, { name: "dataList", type: "Array", required: true });
+      expectRuntimeProp(compiled, { name: "tableList", type: "Array", required: false });
+      expectRuntimeProp(compiled, { name: "loading", type: "Boolean", required: false });
+    } finally {
+      rmSync(spacedRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("imported generic table props stay resolved after component changes from a path with spaces", async () => {
+    const spacedRoot = createSpacedPlaygroundRoot();
+    const plugin = vueTypeResolver({
+      tsconfigPath: join(spacedRoot, "tsconfig.json"),
+    });
+    const buildStart = getHookHandler(plugin.buildStart);
+    const transform = getHookHandler(plugin.transform);
+    const buildEnd = getHookHandler(plugin.buildEnd);
+    const watchChange = getHookHandler(
+      plugin.watchChange as HookLike<(id: string, event?: unknown) => void> | undefined,
+    );
+    const componentPath = join(spacedRoot, "src/components/ImportedGenericTableCase.vue");
+    const warnings: string[] = [];
+    const source = readFileSync(componentPath, "utf8");
+
+    try {
+      await buildStart?.apply({} as never, [{}] as Parameters<NonNullable<typeof buildStart>>);
+
+      const firstResult = await transform?.apply(
+        {
+          warn(message: string) {
+            warnings.push(message);
+          },
+        } as never,
+        [source, componentPath],
+      );
+      const firstTransformed = normalizeTransformCode(firstResult, source);
+      const firstCompiled = compileTransformedComponent(
+        spacedRoot,
+        componentPath,
+        "src/components/ImportedGenericTableCase.vue",
+        firstTransformed,
+      );
+      expectRuntimeProp(firstCompiled, { name: "dataList", type: "Array", required: true });
+      expectRuntimeProp(firstCompiled, { name: "tableList", type: "Array", required: false });
+      expectRuntimeProp(firstCompiled, { name: "loading", type: "Boolean", required: false });
+
+      writeFileSync(componentPath, `${source}\n<!-- touched -->\n`);
+      watchChange?.apply({} as never, [componentPath]);
+      const updatedSource = readFileSync(componentPath, "utf8");
+
+      const secondResult = await transform?.apply(
+        {
+          warn(message: string) {
+            warnings.push(message);
+          },
+        } as never,
+        [updatedSource, componentPath],
+      );
+      const secondTransformed = normalizeTransformCode(secondResult, updatedSource);
+      const secondCompiled = compileTransformedComponent(
+        spacedRoot,
+        componentPath,
+        "src/components/ImportedGenericTableCase.vue",
+        secondTransformed,
+      );
+      expectRuntimeProp(secondCompiled, { name: "dataList", type: "Array", required: true });
+      expectRuntimeProp(secondCompiled, { name: "tableList", type: "Array", required: false });
+      expectRuntimeProp(secondCompiled, { name: "loading", type: "Boolean", required: false });
+      expect(warnings).toEqual([]);
+    } finally {
+      await buildEnd?.apply({} as never, []);
+      rmSync(spacedRoot, { recursive: true, force: true });
+    }
   });
 
   test("the real playground build succeeds with the Vue plugin chain", async () => {
@@ -175,6 +319,7 @@ describe("playground compile output", () => {
       expect(bundle).toContain("Local Complex Case");
       expect(bundle).toContain("Global Ambient Case");
       expect(bundle).toContain("Third Party Case");
+      expect(bundle).toContain("Imported Generic Table Case");
     } finally {
       process.chdir(originalCwd);
       rmSync(outDir, { recursive: true, force: true });
@@ -206,6 +351,7 @@ describe("playground compile output", () => {
         "src/components/LocalComplexCase.vue",
         "src/components/GlobalAmbientCase.vue",
         "src/components/ThirdPartyCase.vue",
+        "src/components/ImportedGenericTableCase.vue",
       ]) {
         const id = join(playgroundRoot, relativePath);
         const source = readFileSync(id, "utf8");
@@ -226,8 +372,8 @@ describe("playground compile output", () => {
       expect(infoCalls).toHaveLength(1);
       expect(infoCalls[0][1]).toEqual({
         currentMode: "incremental",
-        incrementalAttempts: 3,
-        incrementalSuccesses: 3,
+        incrementalAttempts: 4,
+        incrementalSuccesses: 4,
         fullRebuilds: 0,
         fallbacks: {
           sourceFileNotFound: 0,

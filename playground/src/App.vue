@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import GlobalAmbientCase from "./components/GlobalAmbientCase.vue";
+import ImportedGenericTableCase from "./components/ImportedGenericTableCase.vue";
 import LocalComplexCase from "./components/LocalComplexCase.vue";
 import ThirdPartyCase from "./components/ThirdPartyCase.vue";
 </script>
@@ -19,6 +20,7 @@ import ThirdPartyCase from "./components/ThirdPartyCase.vue";
       <LocalComplexCase title="Local Complex Case" :pinned="true" :count="3" mode="compact" />
       <GlobalAmbientCase tone="warm" :version="7" />
       <ThirdPartyCase label="Third Party Case" :active="true" />
+      <ImportedGenericTableCase :data-list="[]" />
     </section>
   </main>
 </template>

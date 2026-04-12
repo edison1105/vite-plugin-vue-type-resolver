@@ -1,7 +1,9 @@
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 import MagicString from "magic-string";
 import { parse } from "@babel/parser";
+import { parse as parseJsonc } from "jsonc-parser";
 import type { Plugin, TransformResult } from "vite-plus";
 
 import { materializeRootProps } from "./materialize/materializeRootProps";
@@ -48,8 +50,94 @@ function shouldIncludeLocalDeclaration(text: string): boolean {
   return !text.includes("defineProps");
 }
 
+interface TsconfigReference {
+  path?: string;
+}
+
+interface TsconfigJson {
+  references?: TsconfigReference[];
+  files?: string[];
+  include?: string[];
+}
+
+function readTsconfig(path: string): TsconfigJson | null {
+  try {
+    return parseJsonc(readFileSync(path, "utf8")) as TsconfigJson;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalizePath(path: string): string {
+  const absolutePath = resolve(path);
+  let currentPath = absolutePath;
+  const suffix: string[] = [];
+
+  while (true) {
+    try {
+      const realPath = realpathSync.native(currentPath);
+      return suffix.length === 0 ? realPath : join(realPath, ...suffix.reverse());
+    } catch {
+      const parentPath = dirname(currentPath);
+
+      if (parentPath === currentPath) {
+        return absolutePath;
+      }
+
+      suffix.push(basename(currentPath));
+      currentPath = parentPath;
+    }
+  }
+}
+
+function resolveReferencedTsconfig(projectFile: string, referencePath: string): string {
+  const referencedPath = resolve(dirname(projectFile), referencePath);
+
+  if (existsSync(referencedPath)) {
+    try {
+      if (statSync(referencedPath).isDirectory()) {
+        return canonicalizePath(join(referencedPath, "tsconfig.json"));
+      }
+    } catch {}
+  }
+
+  return canonicalizePath(
+    referencedPath.endsWith(".json") ? referencedPath : join(referencedPath, "tsconfig.json"),
+  );
+}
+
 function resolveProjectFile(tsconfigPath?: string): string {
-  return tsconfigPath ? resolve(tsconfigPath) : resolve(process.cwd(), "tsconfig.json");
+  const rootProjectFile = canonicalizePath(
+    tsconfigPath ? resolve(tsconfigPath) : resolve(process.cwd(), "tsconfig.json"),
+  );
+
+  if (tsconfigPath) {
+    return rootProjectFile;
+  }
+
+  const config = readTsconfig(rootProjectFile);
+  const references = config?.references
+    ?.map((reference) =>
+      typeof reference.path === "string"
+        ? resolveReferencedTsconfig(rootProjectFile, reference.path)
+        : null,
+    )
+    .filter((path): path is string => path !== null && existsSync(path));
+
+  if (!references || references.length === 0) {
+    return rootProjectFile;
+  }
+
+  const rootHasSources = (config?.files?.length ?? 0) > 0 || (config?.include?.length ?? 0) > 0;
+
+  if (rootHasSources) {
+    return rootProjectFile;
+  }
+
+  const appProjectFile = references.find((projectFile) =>
+    projectFile.endsWith("tsconfig.app.json"),
+  );
+  return appProjectFile ?? references[0] ?? rootProjectFile;
 }
 
 function collectAnalysisParts(sfc: ParsedSfc): AnalysisParts {
@@ -172,7 +260,7 @@ export function vueTypeResolver(options: VueTypeResolverOptions = {}): Plugin {
       return;
     }
 
-    const normalizedPath = resolve(path);
+    const normalizedPath = canonicalizePath(path);
     if (normalizedPath.endsWith(".vue")) {
       return;
     }
@@ -219,8 +307,8 @@ export function vueTypeResolver(options: VueTypeResolverOptions = {}): Plugin {
     }
   }
 
-  async function getSession(): Promise<TsgoSession> {
-    const root = dirname(getProjectFile());
+  async function getSession(projectFile: string): Promise<TsgoSession> {
+    const root = dirname(projectFile);
 
     if (session && sessionRoot === root) {
       return session;
@@ -270,7 +358,8 @@ export function vueTypeResolver(options: VueTypeResolverOptions = {}): Plugin {
       }
 
       const activeProjectFile = getProjectFile();
-      const activeSession = await getSession();
+      const activeSession = await getSession(activeProjectFile);
+      const analysisId = canonicalizePath(id);
       const warnings: string[] = [];
       const changedFiles = pendingChangedFiles.size > 0 ? [...pendingChangedFiles] : undefined;
       let attemptedAnalysis = false;
@@ -295,7 +384,7 @@ export function vueTypeResolver(options: VueTypeResolverOptions = {}): Plugin {
         attemptedAnalysis = true;
         const described = await activeSession.describeRootType({
           projectFile: activeProjectFile,
-          virtualFileName: getAnalysisVirtualFileName(id),
+          virtualFileName: getAnalysisVirtualFileName(analysisId),
           sourceText: buildAnalysisModule({
             imports: analysis.imports,
             localDeclarations: analysis.localDeclarations,

@@ -27,6 +27,9 @@ importers:
       '@vue/compiler-sfc':
         specifier: ^3.5.20
         version: 3.5.32
+      jsonc-parser:
+        specifier: ^3.3.1
+        version: 3.3.1
       magic-string:
         specifier: ^0.30.21
         version: 0.30.21

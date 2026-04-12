@@ -131,4 +131,61 @@ const props = defineProps<Props>()
     expect(transformed).toContain("defineProps<{");
     expect(transformed).not.toContain("defineProps<Props>()");
   });
+
+  test("automatically resolves referenced app tsconfig when root tsconfig only contains project references", async () => {
+    const project = createFixtureProject({
+      "tsconfig.json": JSON.stringify({
+        files: [],
+        references: [{ path: "./tsconfig.app.json" }, { path: "./tsconfig.node.json" }],
+      }),
+      "tsconfig.app.json": `{
+  "compilerOptions": {
+    "strict": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["src/**/*"]
+}
+`,
+      "tsconfig.node.json": `{
+  "compilerOptions": {
+    "composite": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["vite.config.ts"]
+}
+`,
+      "src/types.ts": `
+export interface Props {
+  foo: string
+  bar?: number
+}
+`,
+    });
+
+    const code = `
+<script setup lang="ts">
+import type { Props } from './types'
+const props = defineProps<Props>()
+</script>
+`;
+
+    const plugin = vueTypeResolver();
+
+    const { result, warnings } = await runPluginTransform({
+      plugin,
+      code,
+      id: join(project.root, "src/App.vue"),
+      cwd: project.root,
+    });
+
+    const transformed = normalizeTransformCode(result, code);
+
+    expect(warnings).toHaveLength(0);
+    expect(transformed).not.toBe(code);
+    expect(transformed).toContain("defineProps<{");
+    expect(transformed).toContain("foo: string");
+    expect(transformed).toContain("bar?: number");
+  });
 });
