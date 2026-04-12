@@ -128,7 +128,7 @@ interface SnapshotFileChanges {
 }
 
 export class TsgoSession {
-  private readonly client: TsgoClient;
+  private client: TsgoClient;
   private readonly root: string;
   private readonly virtualFiles = new Map<string, string>();
   private readonly overlayDirectories = new Map<
@@ -153,8 +153,12 @@ export class TsgoSession {
 
   constructor(options: { root: string }) {
     this.root = options.root;
-    this.client = new TsgoClient({
-      cwd: options.root,
+    this.client = this.createClient();
+  }
+
+  private createClient(): TsgoClient {
+    return new TsgoClient({
+      cwd: this.root,
       tsgoPath: getTsgoBinary(),
       callbacks: {
         readFile: (path) => this.readVirtualFile(path),
@@ -164,6 +168,11 @@ export class TsgoSession {
         realpath: (path) => this.getVirtualRealpath(path),
       },
     });
+  }
+
+  private async resetClient(): Promise<void> {
+    await this.client.close();
+    this.client = this.createClient();
   }
 
   async resolveRootType(request: ResolveRootTypeRequest): Promise<ResolveRootTypeResult> {
@@ -325,9 +334,13 @@ export class TsgoSession {
     }
 
     this.snapshotStats.incrementalAttempts += 1;
-    const incremental = await this.resolveRootTypeContextWithFileChanges(request, virtualFileName, {
-      changedFiles: [...changedFiles],
-    });
+    const incremental = await this.tryResolveRootTypeContextWithFileChanges(
+      request,
+      virtualFileName,
+      {
+        changedFiles: [...changedFiles],
+      },
+    );
 
     if (incremental.ok) {
       this.snapshotMode = "incremental";
@@ -341,12 +354,36 @@ export class TsgoSession {
 
     this.recordSnapshotFallback(incremental.reason);
 
+    if (incremental.reason.includes("source file not found")) {
+      await this.resetClient();
+    }
+
     this.snapshotStats.fullRebuilds += 1;
-    const full = await this.resolveRootTypeContextWithFileChanges(request, virtualFileName, {
+    const full = await this.tryResolveRootTypeContextWithFileChanges(request, virtualFileName, {
+      changedFiles: [...changedFiles],
       invalidateAll: true,
     });
     this.snapshotMode = "full";
     return full;
+  }
+
+  private async tryResolveRootTypeContextWithFileChanges(
+    request: ResolveRootTypeRequest,
+    virtualFileName: string,
+    fileChanges: SnapshotFileChanges,
+  ): Promise<ResolvedRootTypeContext | { ok: false; reason: string }> {
+    try {
+      return await this.resolveRootTypeContextWithFileChanges(
+        request,
+        virtualFileName,
+        fileChanges,
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   private async resolveRootTypeContextWithFileChanges(

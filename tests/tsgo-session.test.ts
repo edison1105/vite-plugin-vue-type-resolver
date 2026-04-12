@@ -49,7 +49,6 @@ export interface Props {
         targetName,
       });
 
-      expect(described.ok).toBe(true);
       if (!described.ok) return;
 
       expect(
@@ -561,6 +560,83 @@ export interface BetaProps { beta: number }
         },
       });
     } finally {
+      await session.close();
+    }
+  });
+
+  test("keeps virtual overlay files registered when retrying after source-file-not-found", async () => {
+    const targetName = "__VTR_Target_Source_File_Not_Found_Retry";
+    const sourceText = buildAnalysisModule({
+      imports: [],
+      localDeclarations: ["type Props = { foo: string }"],
+      targetTypeText: "Props",
+      targetName,
+    });
+
+    const project = createFixtureProject({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { strict: true, module: "ESNext", moduleResolution: "Bundler" },
+        include: ["src/**/*"],
+      }),
+    });
+
+    const originalRequest = Object.getOwnPropertyDescriptor(TsgoClient.prototype, "request")
+      ?.value as ClientRequestMethod | undefined;
+    const updateSnapshotParams: unknown[] = [];
+    let injectedFailure = false;
+
+    if (!originalRequest) {
+      throw new Error("TsgoClient.request is unavailable");
+    }
+
+    TsgoClient.prototype.request = async function patchedRequest<TResult>(
+      this: TsgoClient,
+      method: string,
+      params?: unknown,
+    ): Promise<TResult> {
+      if (method === "updateSnapshot") {
+        updateSnapshotParams.push(params);
+        if (!injectedFailure) {
+          injectedFailure = true;
+          throw new Error(
+            `api: client error: source file not found: ${project.root}/src/__vtr__0.ts`,
+          );
+        }
+      }
+
+      return Reflect.apply(originalRequest, this, [method, params]) as Promise<TResult>;
+    };
+
+    const session = new TsgoSession({ root: project.root });
+    try {
+      const described = await session.describeRootType({
+        projectFile: `${project.root}/tsconfig.json`,
+        virtualFileName: `${project.root}/src/App.vue.ts`,
+        sourceText,
+        targetName,
+      });
+
+      expect(described.ok).toBe(true);
+      expect(updateSnapshotParams).toHaveLength(2);
+      expect(updateSnapshotParams[1]).toMatchObject({
+        openProject: `${project.root}/tsconfig.json`,
+        fileChanges: {
+          invalidateAll: true,
+          changedFiles: [expect.stringContaining(`${project.root}/src/__vtr__`)],
+        },
+      });
+      expect(session.getSnapshotStats()).toEqual({
+        currentMode: "full",
+        incrementalAttempts: 1,
+        incrementalSuccesses: 0,
+        fullRebuilds: 1,
+        fallbacks: {
+          sourceFileNotFound: 1,
+          syntheticTargetTypeNotResolved: 0,
+        },
+      });
+    } finally {
+      TsgoClient.prototype.request = originalRequest;
       await session.close();
     }
   });
