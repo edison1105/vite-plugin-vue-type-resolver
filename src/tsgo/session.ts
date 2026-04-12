@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, isAbsolute, normalize, relative, resolve, sep } from "node:path";
 
 import {
-  extractEventNamesFromTypeText,
+  extractEventNamesFromAnalysisSource,
   extractFiniteStringLiteralsFromTypeText,
 } from "../emits/extractEventNames";
 import { TsgoClient } from "./client";
@@ -316,16 +316,8 @@ export class TsgoSession {
         return resolved;
       }
 
-      const typeText = await this.client.request<string>("typeToString", {
-        snapshot: resolved.snapshotId,
-        project: resolved.projectId,
-        type: resolved.typeId,
-        flags: TYPE_FORMAT_NO_TRUNCATION,
-      });
-
-      if (!typeText) {
-        return { ok: false, reason: "resolved defineEmits type could not be printed" };
-      }
+      const syntaxFallback = (): DescribeEmitNamesResult =>
+        extractEventNamesFromAnalysisSource(request.sourceText, request.targetName);
 
       const properties = await this.client.request<TsgoSymbolResponse[]>("getPropertiesOfType", {
         snapshot: resolved.snapshotId,
@@ -341,10 +333,13 @@ export class TsgoSession {
       });
 
       if (properties.length > 0 && signatures.length > 0) {
-        return {
-          ok: false,
-          reason: "defineEmits() type cannot mix call signature and property syntax",
-        };
+        const fallback = syntaxFallback();
+        return fallback.ok
+          ? fallback
+          : {
+              ok: false,
+              reason: "defineEmits() type cannot mix call signature and property syntax",
+            };
       }
 
       if (signatures.length > 0) {
@@ -354,7 +349,10 @@ export class TsgoSession {
           const firstParameterId = signature.parameters[0];
 
           if (!firstParameterId) {
-            return { ok: false, reason: "event names are not a finite string literal union" };
+            const fallback = syntaxFallback();
+            return fallback.ok
+              ? fallback
+              : { ok: false, reason: "event names are not a finite string literal union" };
           }
 
           const firstParameterType = await this.client.request<TsgoTypeResponse | null>(
@@ -367,7 +365,10 @@ export class TsgoSession {
           );
 
           if (!firstParameterType) {
-            return { ok: false, reason: "event names are not a finite string literal union" };
+            const fallback = syntaxFallback();
+            return fallback.ok
+              ? fallback
+              : { ok: false, reason: "event names are not a finite string literal union" };
           }
 
           const firstParameterText = await this.client.request<string>("typeToString", {
@@ -379,7 +380,8 @@ export class TsgoSession {
 
           const extracted = extractFiniteStringLiteralsFromTypeText(firstParameterText);
           if (!extracted.ok) {
-            return extracted;
+            const fallback = syntaxFallback();
+            return fallback.ok ? fallback : extracted;
           }
 
           for (const eventName of extracted.eventNames) {
@@ -398,7 +400,10 @@ export class TsgoSession {
 
         for (const property of properties) {
           if (this.isUnsupportedPropertyKey(property)) {
-            return { ok: false, reason: "event names are not a finite string literal union" };
+            const fallback = syntaxFallback();
+            return fallback.ok
+              ? fallback
+              : { ok: false, reason: "event names are not a finite string literal union" };
           }
 
           eventNames.add(property.name);
@@ -410,7 +415,7 @@ export class TsgoSession {
         };
       }
 
-      return extractEventNamesFromTypeText(typeText);
+      return syntaxFallback();
     } catch (error) {
       return {
         ok: false,

@@ -10,7 +10,23 @@ export type ExtractFiniteStringLiteralsResult =
 
 interface LocalTypeAliasDeclaration {
   type: "TSTypeAliasDeclaration";
+  id?: LocalIdentifier;
   typeAnnotation: LocalTypeNode;
+}
+
+interface LocalInterfaceBody {
+  body: LocalTypeElement[];
+}
+
+interface LocalTSExpressionWithTypeArguments {
+  expression: LocalIdentifier;
+}
+
+interface LocalInterfaceDeclaration {
+  type: "TSInterfaceDeclaration";
+  id: LocalIdentifier;
+  body: LocalInterfaceBody;
+  extends?: LocalTSExpressionWithTypeArguments[] | null;
 }
 
 interface LocalTypeLiteral {
@@ -63,6 +79,11 @@ interface LocalIdentifier {
   name: string;
 }
 
+interface LocalTSTypeReference {
+  type: "TSTypeReference";
+  typeName: LocalIdentifier;
+}
+
 interface LocalStringLiteral {
   type: "StringLiteral";
   value: string;
@@ -86,6 +107,11 @@ interface LocalTemplateLiteral {
 interface LocalTypeAnnotation {
   type: "TSTypeAnnotation";
   typeAnnotation: LocalTypeNode;
+}
+
+interface LocalExportNamedDeclaration {
+  type: "ExportNamedDeclaration";
+  declaration?: LocalModuleDeclaration | null;
 }
 
 interface LocalParameter {
@@ -114,9 +140,20 @@ type LocalTypeNode =
   | LocalUnionType
   | LocalParenthesizedType
   | LocalLiteralType
+  | LocalTSTypeReference
+  | { type: string };
+
+type LocalModuleDeclaration =
+  | LocalTypeAliasDeclaration
+  | LocalInterfaceDeclaration
   | { type: string };
 
 type ExtractionMode = "property" | "call";
+
+interface ExtractionContext {
+  aliases: Map<string, LocalTypeNode>;
+  interfaces: Map<string, LocalInterfaceDeclaration>;
+}
 
 function isParenthesizedType(node: LocalTypeNode): node is LocalParenthesizedType {
   return node.type === "TSParenthesizedType";
@@ -124,6 +161,10 @@ function isParenthesizedType(node: LocalTypeNode): node is LocalParenthesizedTyp
 
 function isLiteralType(node: LocalTypeNode): node is LocalLiteralType {
   return node.type === "TSLiteralType";
+}
+
+function isTypeReference(node: LocalTypeNode): node is LocalTSTypeReference {
+  return node.type === "TSTypeReference";
 }
 
 function isUnionType(node: LocalTypeNode): node is LocalUnionType {
@@ -140,6 +181,30 @@ function isFunctionType(node: LocalTypeNode): node is LocalFunctionType {
 
 function isTypeLiteral(node: LocalTypeNode): node is LocalTypeLiteral {
   return node.type === "TSTypeLiteral";
+}
+
+function isTypeAliasDeclaration(node: unknown): node is LocalTypeAliasDeclaration {
+  return (
+    !!node &&
+    typeof node === "object" &&
+    (node as LocalTypeAliasDeclaration).type === "TSTypeAliasDeclaration"
+  );
+}
+
+function isInterfaceDeclaration(node: unknown): node is LocalInterfaceDeclaration {
+  return (
+    !!node &&
+    typeof node === "object" &&
+    (node as LocalInterfaceDeclaration).type === "TSInterfaceDeclaration"
+  );
+}
+
+function isExportNamedDeclaration(node: unknown): node is LocalExportNamedDeclaration {
+  return (
+    !!node &&
+    typeof node === "object" &&
+    (node as LocalExportNamedDeclaration).type === "ExportNamedDeclaration"
+  );
 }
 
 function isPropertyLikeMember(
@@ -172,9 +237,47 @@ function readPropertyKey(key: LocalPropertyKey): string | null {
   return null;
 }
 
-function extractLiteralEventNames(typeNode: LocalTypeNode): ExtractEventNamesResult {
+function buildExtractionContext(sourceText: string): ExtractionContext {
+  const ast = parse(sourceText, {
+    sourceType: "module",
+    plugins: ["typescript"],
+  });
+  const aliases = new Map<string, LocalTypeNode>();
+  const interfaces = new Map<string, LocalInterfaceDeclaration>();
+
+  for (const statement of ast.program.body) {
+    let declaration: LocalModuleDeclaration | null = null;
+
+    if (isTypeAliasDeclaration(statement) || isInterfaceDeclaration(statement)) {
+      declaration = statement;
+    } else if (isExportNamedDeclaration(statement) && statement.declaration) {
+      declaration = statement.declaration;
+    }
+
+    if (!declaration) {
+      continue;
+    }
+
+    if (isTypeAliasDeclaration(declaration) && declaration.id) {
+      aliases.set(declaration.id.name, declaration.typeAnnotation);
+      continue;
+    }
+
+    if (isInterfaceDeclaration(declaration)) {
+      interfaces.set(declaration.id.name, declaration);
+    }
+  }
+
+  return { aliases, interfaces };
+}
+
+function extractLiteralEventNames(
+  typeNode: LocalTypeNode,
+  context?: ExtractionContext,
+  seenReferences: Set<string> = new Set(),
+): ExtractEventNamesResult {
   if (isParenthesizedType(typeNode)) {
-    return extractLiteralEventNames(typeNode.typeAnnotation);
+    return extractLiteralEventNames(typeNode.typeAnnotation, context, seenReferences);
   }
 
   if (isLiteralType(typeNode)) {
@@ -188,7 +291,7 @@ function extractLiteralEventNames(typeNode: LocalTypeNode): ExtractEventNamesRes
     const eventNames = new Set<string>();
 
     for (const child of typeNode.types) {
-      const result = extractLiteralEventNames(child);
+      const result = extractLiteralEventNames(child, context, seenReferences);
       if (!result.ok) {
         return result;
       }
@@ -199,6 +302,22 @@ function extractLiteralEventNames(typeNode: LocalTypeNode): ExtractEventNamesRes
     }
 
     return { ok: true, eventNames: [...eventNames].sort() };
+  }
+
+  if (isTypeReference(typeNode) && context) {
+    const name = typeNode.typeName.name;
+    if (seenReferences.has(name)) {
+      return { ok: false, reason: "event names are not a finite string literal union" };
+    }
+
+    const target = context.aliases.get(name);
+    if (!target) {
+      return { ok: false, reason: "event names are not a finite string literal union" };
+    }
+
+    const nextSeen = new Set(seenReferences);
+    nextSeen.add(name);
+    return extractLiteralEventNames(target, context, nextSeen);
   }
 
   return { ok: false, reason: "event names are not a finite string literal union" };
@@ -227,7 +346,11 @@ export function extractFiniteStringLiteralsFromTypeText(
   }
 }
 
-function extractCallEventNames(parameters: LocalFunctionParameter[]): ExtractEventNamesResult {
+function extractCallEventNames(
+  parameters: LocalFunctionParameter[],
+  context?: ExtractionContext,
+  seenReferences?: Set<string>,
+): ExtractEventNamesResult {
   const firstParameter = parameters[0];
 
   if (
@@ -237,21 +360,75 @@ function extractCallEventNames(parameters: LocalFunctionParameter[]): ExtractEve
     return { ok: false, reason: "event names are not a finite string literal union" };
   }
 
-  return extractLiteralEventNames(firstParameter.typeAnnotation.typeAnnotation);
+  return extractLiteralEventNames(
+    firstParameter.typeAnnotation.typeAnnotation,
+    context,
+    seenReferences,
+  );
+}
+
+function collectInterfaceEvents(
+  declaration: LocalInterfaceDeclaration,
+  context: ExtractionContext,
+  eventNames: Set<string>,
+  modes: Set<ExtractionMode>,
+  seenReferences: Set<string>,
+): ExtractEventNamesResult {
+  for (const extended of declaration.extends ?? []) {
+    const name = extended.expression.name;
+    const target = context.interfaces.get(name) ?? context.aliases.get(name);
+
+    if (!target) {
+      return { ok: false, reason: "unsupported defineEmits root type" };
+    }
+
+    if (seenReferences.has(name)) {
+      return { ok: false, reason: "unsupported defineEmits root type" };
+    }
+
+    const nextSeen = new Set(seenReferences);
+    nextSeen.add(name);
+
+    const result = isInterfaceDeclaration(target)
+      ? collectInterfaceEvents(target, context, eventNames, modes, nextSeen)
+      : collectTypeNodeEvents(target, context, eventNames, modes, nextSeen);
+    if (!result.ok) {
+      return result;
+    }
+  }
+
+  return collectTypeNodeEvents(
+    {
+      type: "TSTypeLiteral",
+      members: declaration.body.body,
+    },
+    context,
+    eventNames,
+    modes,
+    seenReferences,
+  );
 }
 
 function collectTypeNodeEvents(
   typeNode: LocalTypeNode,
+  context: ExtractionContext | undefined,
   eventNames: Set<string>,
   modes: Set<ExtractionMode>,
+  seenReferences: Set<string> = new Set(),
 ): ExtractEventNamesResult {
   if (isParenthesizedType(typeNode)) {
-    return collectTypeNodeEvents(typeNode.typeAnnotation, eventNames, modes);
+    return collectTypeNodeEvents(
+      typeNode.typeAnnotation,
+      context,
+      eventNames,
+      modes,
+      seenReferences,
+    );
   }
 
   if (isFunctionType(typeNode)) {
     modes.add("call");
-    const result = extractCallEventNames(typeNode.parameters);
+    const result = extractCallEventNames(typeNode.parameters, context, seenReferences);
     if (!result.ok) {
       return result;
     }
@@ -277,7 +454,7 @@ function collectTypeNodeEvents(
 
       if (isCallSignatureMember(member)) {
         modes.add("call");
-        const result = extractCallEventNames(member.parameters);
+        const result = extractCallEventNames(member.parameters, context, seenReferences);
         if (!result.ok) {
           return result;
         }
@@ -293,7 +470,7 @@ function collectTypeNodeEvents(
 
   if (isIntersectionType(typeNode) || isUnionType(typeNode)) {
     for (const child of typeNode.types) {
-      const result = collectTypeNodeEvents(child, eventNames, modes);
+      const result = collectTypeNodeEvents(child, context, eventNames, modes, seenReferences);
       if (!result.ok) {
         return result;
       }
@@ -302,28 +479,50 @@ function collectTypeNodeEvents(
     return { ok: true, eventNames: [] };
   }
 
+  if (isTypeReference(typeNode) && context) {
+    const name = typeNode.typeName.name;
+    if (seenReferences.has(name)) {
+      return { ok: false, reason: "unsupported defineEmits root type" };
+    }
+
+    const interfaceDeclaration = context.interfaces.get(name);
+    if (interfaceDeclaration) {
+      const nextSeen = new Set(seenReferences);
+      nextSeen.add(name);
+      return collectInterfaceEvents(interfaceDeclaration, context, eventNames, modes, nextSeen);
+    }
+
+    const alias = context.aliases.get(name);
+    if (!alias) {
+      return { ok: false, reason: "unsupported defineEmits root type" };
+    }
+
+    const nextSeen = new Set(seenReferences);
+    nextSeen.add(name);
+    return collectTypeNodeEvents(alias, context, eventNames, modes, nextSeen);
+  }
+
   return { ok: false, reason: "unsupported defineEmits root type" };
 }
 
 export function extractEventNamesFromTypeText(typeText: string): ExtractEventNamesResult {
-  try {
-    const ast = parse(`type __VTR_Emits = ${typeText}`, {
-      sourceType: "module",
-      plugins: ["typescript"],
-    });
+  return extractEventNamesFromAnalysisSource(`type __VTR_Emits = ${typeText}`, "__VTR_Emits");
+}
 
-    const declaration = ast.program.body[0];
-    if (!declaration || declaration.type !== "TSTypeAliasDeclaration") {
+export function extractEventNamesFromAnalysisSource(
+  sourceText: string,
+  targetName: string,
+): ExtractEventNamesResult {
+  try {
+    const context = buildExtractionContext(sourceText);
+    const target = context.aliases.get(targetName);
+    if (!target) {
       return { ok: false, reason: "unsupported defineEmits root type" };
     }
 
     const eventNames = new Set<string>();
     const modes = new Set<ExtractionMode>();
-    const result = collectTypeNodeEvents(
-      (declaration as LocalTypeAliasDeclaration).typeAnnotation,
-      eventNames,
-      modes,
-    );
+    const result = collectTypeNodeEvents(target, context, eventNames, modes);
 
     if (!result.ok) {
       return result;
