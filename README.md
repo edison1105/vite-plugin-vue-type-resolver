@@ -119,6 +119,18 @@ vueTypeResolver({
 
 `logSnapshotStats` prints the session-level incremental/full-snapshot counters when the Vite lifecycle closes.
 
+If only some components need tsgo-backed rewriting, pass a synchronous `filter` function.
+
+```ts
+vueTypeResolver({
+  filter({ id }) {
+    return id.includes("/src/components/complex/") || id.endsWith("HeavyTable.vue");
+  },
+});
+```
+
+The filter receives the Vue file path as `id` and the original SFC source as `code`. Return `true` to let the resolver run for that file, or `false` to skip it entirely.
+
 ## How It Works
 
 ### 1. Synthetic analysis module

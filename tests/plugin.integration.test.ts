@@ -185,6 +185,83 @@ const props = defineProps<Props>()
     expect(transformed).toContain("import type { Props } from './types'");
   });
 
+  test("rewrites matching files when the filter allows them", async () => {
+    const project = createFixtureProject({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { strict: true, module: "ESNext", moduleResolution: "Bundler" },
+        include: ["src/**/*"],
+      }),
+      "src/types.ts": `
+export interface Props {
+  foo: string
+}
+`,
+    });
+
+    const code = `
+<script setup lang="ts">
+import type { Props } from './types'
+const props = defineProps<Props>()
+</script>
+`;
+
+    const plugin = vueTypeResolver({
+      tsconfigPath: join(project.root, "tsconfig.json"),
+      filter: ({ id }) => id.endsWith("Enabled.vue"),
+    });
+
+    const { result, warnings } = await runPluginTransform({
+      plugin,
+      code,
+      id: join(project.root, "src/Enabled.vue"),
+    });
+
+    const transformed = normalizeTransformCode(result, code);
+
+    expect(warnings).toHaveLength(0);
+    expect(transformed).not.toBe(code);
+    expect(transformed).toContain("defineProps<{");
+    expect(transformed).toContain("foo: string");
+  });
+
+  test("leaves non-matching files unchanged when the filter rejects them", async () => {
+    const project = createFixtureProject({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { strict: true, module: "ESNext", moduleResolution: "Bundler" },
+        include: ["src/**/*"],
+      }),
+      "src/types.ts": `
+export interface Props {
+  foo: string
+}
+`,
+    });
+
+    const code = `
+<script setup lang="ts">
+import type { Props } from './types'
+const props = defineProps<Props>()
+</script>
+`;
+
+    const plugin = vueTypeResolver({
+      tsconfigPath: join(project.root, "tsconfig.json"),
+      filter: ({ id }) => id.endsWith("Enabled.vue"),
+    });
+
+    const { result, warnings } = await runPluginTransform({
+      plugin,
+      code,
+      id: join(project.root, "src/Disabled.vue"),
+    });
+
+    const transformed = normalizeTransformCode(result, code);
+
+    expect(warnings).toHaveLength(0);
+    expect(transformed).toBe(code);
+    expect(transformed).toContain("defineProps<Props>()");
+  });
+
   test("warns and leaves the source unchanged on fallback", async () => {
     const project = createFixtureProject({
       "tsconfig.json": JSON.stringify({

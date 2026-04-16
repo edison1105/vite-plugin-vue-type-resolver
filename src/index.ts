@@ -1,3 +1,7 @@
 export { vueTypeResolver } from "./plugin";
 
-export type { VueTypeResolverOptions } from "./options";
+export type {
+  VueTypeResolverFilter,
+  VueTypeResolverFilterContext,
+  VueTypeResolverOptions,
+} from "./options";

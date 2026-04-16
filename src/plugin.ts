@@ -352,6 +352,7 @@ export function vueTypeResolver(options: VueTypeResolverOptions = {}): Plugin {
     async transform(code, id, _options) {
       if (!id.endsWith(".vue")) return null;
       if (!mayContainTypedMacros(code)) return null;
+      if (normalized.filter && !normalized.filter({ id, code })) return null;
 
       const cached = getCachedTransform(id, code);
       if (cached) {

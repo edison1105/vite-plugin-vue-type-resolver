@@ -106,6 +106,70 @@ const props = defineProps({
     }
   });
 
+  test("skips tsgo setup when the filter rejects a typed SFC", async () => {
+    const project = createFixtureProject({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { strict: true, module: "ESNext", moduleResolution: "Bundler" },
+        include: ["src/**/*"],
+      }),
+    });
+
+    const plugin = vueTypeResolver({
+      tsconfigPath: join(project.root, "tsconfig.json"),
+      filter: ({ id }) => id.endsWith("Enabled.vue"),
+    });
+
+    const buildStart = getHookHandler(plugin.buildStart);
+    const transform = getHookHandler(plugin.transform);
+    const buildEnd = getHookHandler(plugin.buildEnd);
+
+    const code = `
+<script setup lang="ts">
+type Props = {
+  foo: string
+}
+const props = defineProps<Props>()
+</script>
+`;
+
+    const warnings: string[] = [];
+    const warnContext = {
+      warn(message: string) {
+        warnings.push(message);
+      },
+    };
+
+    const originalClose = Object.getOwnPropertyDescriptor(TsgoSession.prototype, "close")?.value;
+    let closeCount = 0;
+
+    if (!originalClose) {
+      throw new Error("TsgoSession.close is unavailable");
+    }
+
+    TsgoSession.prototype.close = async function patchedClose(this: TsgoSession) {
+      closeCount += 1;
+      return Reflect.apply(originalClose, this, []);
+    };
+
+    try {
+      await buildStart?.apply({} as never, [{}] as Parameters<NonNullable<typeof buildStart>>);
+
+      const result = await transform?.apply(warnContext as never, [
+        code,
+        join(project.root, "src/Disabled.vue"),
+      ]);
+
+      expect(result).toBeNull();
+      expect(warnings).toHaveLength(0);
+
+      await buildEnd?.apply({} as never, []);
+
+      expect(closeCount).toBe(0);
+    } finally {
+      TsgoSession.prototype.close = originalClose;
+    }
+  });
+
   test("caches repeated transforms for unchanged SFC source", async () => {
     const project = createFixtureProject({
       "tsconfig.json": JSON.stringify({
