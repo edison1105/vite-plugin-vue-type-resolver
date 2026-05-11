@@ -19,6 +19,7 @@ The plugin does not replace Vue's compiler. It feeds Vue a simpler type.
 
 - resolves `defineProps<T>()` and `defineEmits<T>()` with `tsgo`
 - supports local, imported, global, and third-party types visible to the current project
+- supports type parameters declared by the `generic` attribute on `<script setup>`
 - rewrites only the generic type argument
 - warns and leaves the source unchanged when type analysis or lowering cannot complete safely
 - does not generate runtime props or emits options by itself
@@ -107,7 +108,7 @@ export default defineConfig({
 });
 ```
 
-The plugin works on Vue SFCs that use `<script setup lang="ts">` and typed `defineProps<T>()` or `defineEmits<T>()`.
+The plugin works on Vue SFCs that use `<script setup lang="ts">` and typed `defineProps<T>()` or `defineEmits<T>()`. It also understands Vue's generic SFC syntax, such as `<script setup lang="ts" generic="T extends object">`.
 If your project does not keep `tsconfig.json` at the Vite root, pass `tsconfigPath` to point the resolver at the right project file.
 
 ```ts
@@ -131,6 +132,25 @@ vueTypeResolver({
 
 The filter receives the Vue file path as `id` and the original SFC source as `code`. Return `true` to let the resolver run for that file, or `false` to skip it entirely.
 
+Generic SFC type parameters can be used by props and emits types:
+
+```vue
+<script setup lang="ts" generic="Row extends object, Key extends keyof Row = keyof Row">
+type TableProps = {
+  row?: Row;
+  rows?: Row[];
+  selectedKey?: Key;
+};
+
+type TableEmits = {
+  select: [row: Row, key: Key];
+};
+
+defineProps<TableProps>();
+defineEmits<TableEmits>();
+</script>
+```
+
 ## How It Works
 
 ### 1. Synthetic analysis module
@@ -139,6 +159,7 @@ The plugin does not ask `tsgo` to analyze the `.vue` file directly. Instead it b
 
 - the imports from `<script>` and `<script setup>`
 - supported local declarations copied from the SFC
+- erased `<script setup generic>` type parameter names, so checker analysis can resolve generic component props and emits
 - a synthetic alias like `type __VTR_Target_0 = <original macro type>`
 
 That module gives `tsgo` a normal TypeScript file to analyze, with the same project-visible symbols the component can already use.

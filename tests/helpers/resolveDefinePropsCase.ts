@@ -25,6 +25,7 @@ export interface ResolveDefinePropsCaseResult {
 
 interface ResolveDefinePropsCaseInput {
   scriptSetup: string;
+  scriptSetupAttrs?: string;
   files?: Record<string, string>;
   compilerOptions?: Record<string, unknown>;
   compile?: boolean;
@@ -266,7 +267,8 @@ export async function resolveDefinePropsCase(
   input: ResolveDefinePropsCaseInput,
 ): Promise<ResolveDefinePropsCaseResult> {
   const filename = "src/App.vue";
-  const source = `<script setup lang="ts">\n${input.scriptSetup}\n</script>\n`;
+  const scriptSetupAttrs = input.scriptSetupAttrs ? ` ${input.scriptSetupAttrs}` : "";
+  const source = `<script setup lang="ts"${scriptSetupAttrs}>\n${input.scriptSetup}\n</script>\n`;
   const projectFiles = {
     "tsconfig.json": JSON.stringify(
       {

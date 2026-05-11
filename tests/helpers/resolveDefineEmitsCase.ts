@@ -19,6 +19,7 @@ export interface ResolveDefineEmitsCaseResult {
 
 interface ResolveDefineEmitsCaseInput {
   scriptSetup: string;
+  scriptSetupAttrs?: string;
   script?: string;
   files?: Record<string, string>;
   compilerOptions?: Record<string, unknown>;
@@ -210,9 +211,10 @@ export async function resolveDefineEmitsCase(
   input: ResolveDefineEmitsCaseInput,
 ): Promise<ResolveDefineEmitsCaseResult> {
   const filename = "src/App.vue";
+  const scriptSetupAttrs = input.scriptSetupAttrs ? ` ${input.scriptSetupAttrs}` : "";
   const source = [
     input.script ? `<script lang="ts">\n${input.script}\n</script>` : "",
-    `<script setup lang="ts">\n${input.scriptSetup}\n</script>`,
+    `<script setup lang="ts"${scriptSetupAttrs}>\n${input.scriptSetup}\n</script>`,
     "",
   ].join("\n");
   const projectFiles = {

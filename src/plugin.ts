@@ -22,6 +22,20 @@ interface AnalysisParts {
   localDeclarations: string[];
 }
 
+interface TypeParameterLike {
+  type: string;
+  name?: string;
+}
+
+interface TypeParameterDeclarationLike {
+  params: TypeParameterLike[];
+}
+
+interface GenericCarrierLike {
+  type: string;
+  typeParameters?: TypeParameterDeclarationLike | null;
+}
+
 interface CachedTransformEntry {
   code: string;
   result: TransformResult | null;
@@ -50,6 +64,29 @@ function isSupportedLocalDeclaration(node: TopLevelNode): boolean {
 
 function shouldIncludeLocalDeclaration(text: string): boolean {
   return !text.includes("defineProps") && !text.includes("defineEmits");
+}
+
+function collectErasedScriptSetupGenerics(sfc: ParsedSfc): string[] {
+  const genericText = sfc.scriptSetup?.attrs.generic;
+  if (typeof genericText !== "string" || genericText.trim() === "") {
+    return [];
+  }
+
+  try {
+    const ast = parse(`function __VTR__<${genericText}>() {}`, {
+      sourceType: "module",
+      plugins: ["typescript"],
+    });
+    const declaration = ast.program.body[0] as GenericCarrierLike | undefined;
+    const params = declaration?.typeParameters?.params ?? [];
+
+    return params
+      .map((param) => (param.type === "TSTypeParameter" ? param.name : undefined))
+      .filter((name): name is string => typeof name === "string" && name.length > 0)
+      .map((name) => `type ${name} = any;`);
+  } catch {
+    return [];
+  }
 }
 
 interface TsconfigReference {
@@ -144,7 +181,7 @@ function resolveProjectFile(tsconfigPath?: string): string {
 
 function collectAnalysisParts(sfc: ParsedSfc): AnalysisParts {
   const imports: string[] = [];
-  const localDeclarations: string[] = [];
+  const localDeclarations: string[] = collectErasedScriptSetupGenerics(sfc);
 
   for (const block of [sfc.script, sfc.scriptSetup]) {
     if (!block || block.attrs.lang !== "ts") {
